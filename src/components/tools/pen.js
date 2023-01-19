@@ -4,7 +4,8 @@ import {
   SOUND_PEN_START_DRAW,
   SOUND_PEN_STOP_DRAW,
   SOUND_PEN_UNDO_DRAW,
-  SOUND_PEN_CHANGE_COLOR
+  SOUND_PEN_CHANGE_COLOR,
+  SOUND_QUACK
 } from "../../systems/sound-effects-system";
 import { waitForDOMContentLoaded } from "../../utils/async-utils";
 import { convertStandardMaterial } from "../../utils/material-utils";
@@ -99,10 +100,13 @@ AFRAME.registerComponent("pen", {
     near: { default: 0.01 },
     drawMode: { default: DRAW_MODE.DEFAULT_3D, oneOf: [DRAW_MODE.DEFAULT_3D, DRAW_MODE.PROJECTION] },
     penVisible: { default: true },
-    penTipPosition: { default: { x: 0, y: 0, z: 0 } }
+    penTipPosition: { default: { x: 0, y: 0, z: 0 } },
+    drawableObjects: { default: ["interactable"] }
   },
 
   init() {
+    this.isDrawingEnabled = false;
+
     this.timeSinceLastDraw = 0;
 
     this.lastPosition = new THREE.Vector3();
@@ -200,9 +204,10 @@ AFRAME.registerComponent("pen", {
 
       const intersection = this._getIntersection(cursorPose);
 
+      this._checkIsDrawingEnabled(intersection);
       this._updatePenTip(intersection);
 
-      const laserVisible = this.data.drawMode === DRAW_MODE.PROJECTION && !!intersection;
+      const laserVisible = this.data.drawMode === DRAW_MODE.PROJECTION && !!intersection && this.isDrawingEnabled;
       const laserInHand = this.el.sceneEl.is("vr-mode") && laserVisible;
 
       if (this.penLaserAttributes.laserVisible !== laserVisible) {
@@ -219,7 +224,8 @@ AFRAME.registerComponent("pen", {
         this._updateLaser(cursorPose, intersection);
       }
 
-      const penVisible = (this.grabberId !== "left-cursor" && this.grabberId !== "right-cursor") || !intersection;
+      const penVisible =
+        (this.grabberId !== "left-cursor" && this.grabberId !== "right-cursor") || !this.isDrawingEnabled;
       this._setPenVisible(penVisible);
       this.el.setAttribute("pen", { penVisible: penVisible });
 
@@ -255,9 +261,12 @@ AFRAME.registerComponent("pen", {
     if (this.grabberId && pathsMap[this.grabberId]) {
       const sfx = this.el.sceneEl.systems["hubs-systems"].soundEffectsSystem;
       const paths = pathsMap[this.grabberId];
-      if (userinput.get(paths.startDrawing)) {
+      if (this.isDrawingEnabled && userinput.get(paths.startDrawing)) {
         this._startDraw();
         sfx.playSoundOneShot(SOUND_PEN_START_DRAW);
+      } else if (userinput.get(paths.startDrawing)) {
+        // TODO | Quack Sound, change per customer
+        sfx.playSoundOneShot(SOUND_QUACK);
       }
       if (userinput.get(paths.stopDrawing)) {
         this._endDraw();
@@ -311,6 +320,13 @@ AFRAME.registerComponent("pen", {
       return null;
     };
   })(),
+
+  _checkIsDrawingEnabled(intersection) {
+    if (intersection) {
+      const intersectionEl = intersection.object.el;
+      this.isDrawingEnabled = this.data.drawableObjects.some(className => intersectionEl.classList.contains(className));
+    } else this.isDrawingEnabled = false;
+  },
 
   _updatePenTip(intersection) {
     if (this.data.drawMode === DRAW_MODE.PROJECTION) {
@@ -379,6 +395,11 @@ AFRAME.registerComponent("pen", {
   })(),
 
   _doDraw(intersection, dt) {
+    if (!this.isDrawingEnabled) {
+      this.worldPosition.copy(this.lastPosition);
+      this._endDraw();
+    }
+
     //Prevent drawings from "jumping" large distances
     if (
       this.currentDrawing &&
